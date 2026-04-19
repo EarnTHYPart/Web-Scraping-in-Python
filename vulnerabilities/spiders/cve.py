@@ -46,6 +46,7 @@ class CveSpider(scrapy.Spider):
                 continue
 
             description = self._pick_english_description(cve.get("descriptions") or [])
+            metadata = self._extract_nvd_metadata(cve)
 
             count += 1
             yield scrapy.Request(
@@ -55,6 +56,7 @@ class CveSpider(scrapy.Spider):
                     "cve_id": cve_id,
                     "description": description,
                     "search_keyword": self.keyword,
+                    "metadata": metadata,
                 },
             )
             if count >= self.limit:
@@ -65,11 +67,18 @@ class CveSpider(scrapy.Spider):
         references = self._extract_references(payload)
 
         item = VulnerabilitiesItem()
+        metadata = response.meta.get("metadata") or {}
         item["cve_id"] = response.meta.get("cve_id")
         item["summary"] = response.meta.get("description")
         item["detail_url"] = response.url
         item["references"] = references
         item["search_keyword"] = response.meta.get("search_keyword")
+        item["published"] = metadata.get("published")
+        item["last_modified"] = metadata.get("last_modified")
+        item["source_identifier"] = metadata.get("source_identifier")
+        item["severity"] = metadata.get("severity")
+        item["cvss_score"] = metadata.get("cvss_score")
+        item["cvss_vector"] = metadata.get("cvss_vector")
         yield item
 
     @staticmethod
@@ -93,3 +102,38 @@ class CveSpider(scrapy.Spider):
                     refs.append(ref.get("url"))
 
         return list(dict.fromkeys(refs))
+
+    @staticmethod
+    def _extract_nvd_metadata(cve):
+        metrics = cve.get("metrics") or {}
+        severity, score, vector = CveSpider._pick_cvss(metrics)
+        return {
+            "published": cve.get("published"),
+            "last_modified": cve.get("lastModified"),
+            "source_identifier": cve.get("sourceIdentifier"),
+            "severity": severity,
+            "cvss_score": score,
+            "cvss_vector": vector,
+        }
+
+    @staticmethod
+    def _pick_cvss(metrics):
+        metric_sets = (
+            metrics.get("cvssMetricV31")
+            or metrics.get("cvssMetricV30")
+            or metrics.get("cvssMetricV2")
+            or []
+        )
+        if not metric_sets:
+            return None, None, None
+
+        selected = metric_sets[0]
+        for metric in metric_sets:
+            base_score = (metric.get("cvssData") or {}).get("baseScore")
+            selected_score = (selected.get("cvssData") or {}).get("baseScore")
+            if base_score is not None and (selected_score is None or base_score > selected_score):
+                selected = metric
+
+        cvss_data = selected.get("cvssData") or {}
+        severity = cvss_data.get("baseSeverity") or selected.get("baseSeverity")
+        return severity, cvss_data.get("baseScore"), cvss_data.get("vectorString")

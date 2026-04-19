@@ -16,6 +16,12 @@ Collected fields include:
 - `detail_url`
 - `references`
 - `search_keyword`
+- `published`
+- `last_modified`
+- `source_identifier`
+- `severity`
+- `cvss_score`
+- `cvss_vector`
 
 ## Structure
 

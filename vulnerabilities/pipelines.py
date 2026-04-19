@@ -27,7 +27,22 @@ class VulnerabilitiesPipeline:
             adapter["summary"] = " ".join(str(summary).split())
 
         references = adapter.get("references") or []
-        adapter["references"] = list(dict.fromkeys(references))
+        adapter["references"] = list(dict.fromkeys(str(ref).strip() for ref in references if ref))
+
+        severity = adapter.get("severity")
+        if severity:
+            adapter["severity"] = str(severity).strip().upper()
+
+        cvss_score = adapter.get("cvss_score")
+        if cvss_score is not None:
+            try:
+                adapter["cvss_score"] = float(cvss_score)
+            except (TypeError, ValueError):
+                adapter["cvss_score"] = None
+
+        source_identifier = adapter.get("source_identifier")
+        if source_identifier:
+            adapter["source_identifier"] = str(source_identifier).strip()
 
         self.seen_cves.add(cve_id)
         return item
