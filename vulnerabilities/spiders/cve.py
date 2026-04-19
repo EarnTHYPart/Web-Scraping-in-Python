@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import scrapy
 
 from vulnerabilities.items import VulnerabilitiesItem
@@ -5,14 +7,15 @@ from vulnerabilities.items import VulnerabilitiesItem
 
 class CveSpider(scrapy.Spider):
     name = "cve"
-    allowed_domains = ["services.nvd.nist.gov", "cveawg.mitre.org", "cve.mitre.org"]
-    nvd_api_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    allowed_domains = ["services.nvd.nist.gov", "cveawg.mitre.org"]
+    nvd_search_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    cve_detail_api = "https://cveawg.mitre.org/api/cve"
 
     def __init__(self, keyword="python", year=None, limit=25, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.keyword = keyword.strip() or "python"
-        self.limit = max(1, int(limit))
         self.year = int(year) if year is not None else None
+        self.limit = max(1, int(limit))
 
     def start_requests(self):
         params = {
@@ -21,23 +24,15 @@ class CveSpider(scrapy.Spider):
             "startIndex": 0,
         }
         yield scrapy.Request(
-            url=self.nvd_api_url,
-            method="GET",
-            cb_kwargs={"params": params},
-            callback=self.request_nvd,
+            url=f"{self.nvd_search_url}?{urlencode(params)}",
+            callback=self.parse_search_results,
         )
 
-    def request_nvd(self, response, params):
-        yield response.follow(
-            url=f"{self.nvd_api_url}?{self._encode_params(params)}",
-            callback=self.parse_nvd_results,
-        )
-
-    def parse_nvd_results(self, response):
+    def parse_search_results(self, response):
         payload = response.json()
         vulnerabilities = payload.get("vulnerabilities") or []
         if not vulnerabilities:
-            self.logger.warning("No NVD results found for keyword: %s", self.keyword)
+            self.logger.warning("No CVE results found from NVD for keyword: %s", self.keyword)
             return
 
         count = 0
@@ -50,34 +45,31 @@ class CveSpider(scrapy.Spider):
             if self.year is not None and not cve_id.startswith(f"CVE-{self.year}-"):
                 continue
 
-            summary = self._pick_english_description(cve.get("descriptions") or [])
-            detail_url = f"https://cveawg.mitre.org/api/cve/{cve_id}"
+            description = self._pick_english_description(cve.get("descriptions") or [])
+
             count += 1
             yield scrapy.Request(
-                url=detail_url,
+                url=f"{self.cve_detail_api}/{cve_id}",
                 callback=self.parse_detail,
                 meta={
                     "cve_id": cve_id,
-                    "description": summary,
+                    "description": description,
                     "search_keyword": self.keyword,
                 },
             )
-
             if count >= self.limit:
                 break
 
     def parse_detail(self, response):
-        meta = response.meta
-        payload = response.json() if response.headers.get("Content-Type") else {}
-
+        payload = response.json() if response.text else {}
         references = self._extract_references(payload)
 
         item = VulnerabilitiesItem()
-        item["cve_id"] = meta.get("cve_id")
-        item["summary"] = meta.get("description")
+        item["cve_id"] = response.meta.get("cve_id")
+        item["summary"] = response.meta.get("description")
         item["detail_url"] = response.url
         item["references"] = references
-        item["search_keyword"] = meta.get("search_keyword")
+        item["search_keyword"] = response.meta.get("search_keyword")
         yield item
 
     @staticmethod
@@ -101,7 +93,3 @@ class CveSpider(scrapy.Spider):
                     refs.append(ref.get("url"))
 
         return list(dict.fromkeys(refs))
-
-    @staticmethod
-    def _encode_params(params):
-        return "&".join(f"{key}={value}" for key, value in params.items())
